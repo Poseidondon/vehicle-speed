@@ -8,10 +8,7 @@ from shapely.geometry import Point
 from shapely.geometry.polygon import Polygon
 
 
-def visualize(model, video_path, markup_path, vid_stride=0):
-    # tracking: {id: [class, conf, first_frame, last_frame]}
-    objects = {}
-
+def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml"):
     # font
     font = cv2.FONT_HERSHEY_SIMPLEX
     fontScale = 1
@@ -22,6 +19,9 @@ def visualize(model, video_path, markup_path, vid_stride=0):
     # open markup
     with open(markup_path) as f:
         markup = json.load(f)
+
+    # tracking: [{id: [class, conf, first_frame, last_frame]}]
+    objects_list = [{} for _ in range(len(markup['areas']))]
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -38,7 +38,7 @@ def visualize(model, video_path, markup_path, vid_stride=0):
 
         if success:
             # Run YOLOv8 tracking on the frame, persisting tracks between frames
-            result = model.track(frame, persist=True)
+            result = model.track(frame, persist=True, tracker=tracker)
 
             if result[0].boxes.id is None:
                 continue
@@ -53,15 +53,16 @@ def visualize(model, video_path, markup_path, vid_stride=0):
 
             # Visualize the results on the frame
             annotated_frame = result[0].plot()
+            w, h, d = annotated_frame.shape
 
             # draw centers
             for center in box_centers:
                 cv2.circle(annotated_frame, center, 3, (0, 0, 255), thickness=-1)
 
             # check if objects inside areas
-            w, h, d = annotated_frame.shape
             for id, cls, conf, center in zip(track_ids, classes, confs, box_centers):
-                for area in markup['areas']:
+                for i, area in enumerate(markup['areas']):
+                    objects = objects_list[i]
                     areas = (np.array(area) * np.array([h, w])).astype(np.int32)
                     # check for new ids
                     if id in objects:
@@ -90,27 +91,40 @@ def visualize(model, video_path, markup_path, vid_stride=0):
                 cv2.line(annotated_frame, areas[1], areas[2], (0, 255, 0), thickness=2)
                 cv2.line(annotated_frame, areas[2], areas[3], (0, 0, 255), thickness=2)
                 cv2.line(annotated_frame, areas[3], areas[0], (0, 255, 0), thickness=2)
-                # cv2.polylines(annotated_frame, [areas], isClosed=True, color=(0, 0, 255), thickness=2)
 
             # counters
-            car_frames = [f2 - f1 for cls, _, f1, f2 in objects.values() if cls == 2 and f1 is not None and f2 is not None]
+            # sort ids which present in many zones
+            objects_res = {}
+            for objects in objects_list:
+                for id, (cls, _, f1, f2) in objects.items():
+                    if f1 is None or f2 is None:
+                        continue
+
+                    diff = f2 - f1
+                    if id in objects_res:
+                        if objects_res[id][1] <= diff:
+                            objects_res[id] = cls, diff
+                    else:
+                        objects_res[id] = cls, diff
+
+            car_frames = [diff for cls, diff in objects_res.values() if cls == 2]
             car_count = len(car_frames)
             if car_count:
-                car_speed = sum([0.02 / (f / fps / 3600) for f in car_frames]) / len(car_frames)
+                car_speed = sum([0.02 / (f / fps / 3600) for f in car_frames]) / car_count
             else:
                 car_speed = float('nan')
 
-            bus_frames = [f2 - f1 for cls, _, f1, f2 in objects.values() if cls == 1 and f1 is not None and f2 is not None]
+            bus_frames = [diff for cls, diff in objects_res.values() if cls == 1]
             bus_count = len(bus_frames)
             if bus_count:
-                bus_speed = sum([0.02 / (f / fps / 3600) for f in bus_frames]) / len(bus_frames)
+                bus_speed = sum([0.02 / (f / fps / 3600) for f in bus_frames]) / bus_count
             else:
                 bus_speed = float('nan')
 
-            van_frames = [f2 - f1 for cls, _, f1, f2 in objects.values() if cls == 4 and f1 is not None and f2 is not None]
+            van_frames = [diff for cls, diff in objects_res.values() if cls == 4]
             van_count = len(van_frames)
             if van_count:
-                van_speed = sum([0.02 / (f / fps / 3600) for f in van_frames]) / len(van_frames)
+                van_speed = sum([0.02 / (f / fps / 3600) for f in van_frames]) / van_count
             else:
                 van_speed = float('nan')
 
@@ -170,10 +184,10 @@ def visualize(model, video_path, markup_path, vid_stride=0):
     # Release the video capture object and close the display window
     cap.release()
     cv2.destroyAllWindows()
-    print(objects[25])
 
 
 model = YOLO('models/yolov8s_1.pt')
-fname = 'KRA-2-10-2023-09-11-morning'
+fname = 'KRA-2-7-2023-08-23-evening'
 
-visualize(model, f'videos/van.mp4', f'videos/markup/{fname}.json', vid_stride=0)
+# visualize(model, f'videos/raw/{fname}.mp4', f'videos/markup/{fname}.json', vid_stride=0)
+visualize(model, f'videos/raw/output.mp4', f'videos/markup/{fname}.json', vid_stride=2)
