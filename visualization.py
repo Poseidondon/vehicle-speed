@@ -4,8 +4,8 @@ import numpy as np
 import torch
 
 from ultralytics import YOLO
-from shapely.geometry import Point
-from shapely.geometry.polygon import Polygon
+from types import SimpleNamespace
+from utils import get_oriented_annotations, lies_between, mid_projection
 
 
 def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml"):
@@ -19,9 +19,11 @@ def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml
     # open markup
     with open(markup_path) as f:
         markup = json.load(f)
+    areas_list = get_oriented_annotations(markup)
+    zones_list = markup['zones']
 
-    # tracking: [{id: [class, conf, first_frame, last_frame]}]
-    objects_list = [{} for _ in range(len(markup['areas']))]
+    # tracking: [{id: [class, conf, first_frame, last_frame, valid]}]
+    objects_list = [{} for _ in range(len(areas_list))]
 
     cap = cv2.VideoCapture(video_path)
     fps = cap.get(cv2.CAP_PROP_FPS)
@@ -61,110 +63,148 @@ def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml
 
             # check if objects inside areas
             for id, cls, conf, center in zip(track_ids, classes, confs, box_centers):
-                for i, area in enumerate(markup['areas']):
+                for i, area in enumerate(areas_list):
                     objects = objects_list[i]
                     areas = (np.array(area) * np.array([h, w])).astype(np.int32)
+                    seg1 = areas[[0, 1]]
+                    seg2 = areas[[2, 3]]
+                    par1 = areas[[1, 2]]
+                    par2 = areas[[0, 3]]
+                    mid_par = np.array([(areas[0] + areas[1]) // 2, (areas[2] + areas[3]) // 2])
+
+                    # debug
+                    # cv2.putText(annotated_frame, f"{proj:.3f}", center, cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 0, 0), 2)
+
                     # check for new ids
                     if id in objects:
                         # update class if required
-                        if conf >= objects[id][1]:
-                            objects[id][:2] = cls, conf
+                        if conf >= objects[id].conf:
+                            objects[id].cls = cls
+                            objects[id].conf = conf
                     else:
-                        objects[id] = [cls, conf, None, None]
+                        # create new object
+                        objects[id] = SimpleNamespace(cls=cls, conf=conf, valid=False,
+                                                      start_value=None, start_frame=None,
+                                                      end_value=None, end_frame=None)
+
+                    # validate (check if car in zone)
+                    if not objects[id].valid and lies_between(center, par1, par2):
+                        objects[id].valid = True
 
                     # check if point inside area
-                    if Polygon(areas).contains(Point(center)):
+                    if lies_between(center, seg1, seg2):
                         # first enter
-                        if objects[id][2] is None:
-                            objects[id][2] = frame_n
+                        if objects[id].start_value is None:
+                            objects[id].start_value = mid_projection(center, mid_par)
+                            objects[id].start_frame = frame_n
                         # not first enter
-                        elif objects[id][3] is not None:
-                            objects[id][3] = None
+                        elif objects[id].end_value is not None:
+                            objects[id].end_value = None
+                            objects[id].end_frame = None
                     # exit
-                    elif objects[id][2] is not None and objects[id][3] is None:
-                        objects[id][3] = frame_n
+                    elif objects[id].start_value is not None and objects[id].end_value is None:
+                        objects[id].end_value = mid_projection(center, mid_par)
+                        objects[id].end_frame = frame_n
 
             # draw borders
-            for area in markup['areas']:
+            for area in areas_list:
                 areas = (np.array(area) * np.array([h, w])).astype(np.int32)
-                cv2.line(annotated_frame, areas[0], areas[1], (0, 0, 255), thickness=2)
-                cv2.line(annotated_frame, areas[1], areas[2], (0, 255, 0), thickness=2)
-                cv2.line(annotated_frame, areas[2], areas[3], (0, 0, 255), thickness=2)
-                cv2.line(annotated_frame, areas[3], areas[0], (0, 255, 0), thickness=2)
+                seg1 = areas[[0, 1]]
+                seg2 = areas[[2, 3]]
+                par1 = areas[[1, 2]]
+                par2 = areas[[0, 3]]
+
+                cv2.line(annotated_frame, seg1[0], seg1[1], (0, 0, 255), thickness=2)
+                cv2.line(annotated_frame, par1[0], par1[1], (0, 255, 255), thickness=2)
+                cv2.line(annotated_frame, seg2[0], seg2[1], (0, 0, 255), thickness=2)
+                cv2.line(annotated_frame, par2[0], par2[1], (0, 255, 255), thickness=2)
+
+                # cv2.line(annotated_frame, (areas[0] + areas[1]) // 2, (areas[2] + areas[3]) // 2, (255, 0, 0), thickness=2)
+
+            for zone in zones_list:
+                zone = (np.array(zone) * np.array([h, w])).astype(np.int32)
+                cv2.polylines(annotated_frame, [zone], isClosed=True, color=(255, 0, 255), thickness=2)
 
             # counters
             # sort ids which present in many zones
+            # {id: cls, dist, frames}
             objects_res = {}
             for objects in objects_list:
-                for id, (cls, _, f1, f2) in objects.items():
-                    if f1 is None or f2 is None:
+                for id, obj in objects.items():
+                    if obj.start_value is None or obj.end_value is None or not obj.valid:
                         continue
 
-                    diff = f2 - f1
+                    dist = abs(obj.end_value - obj.start_value)
+                    frames = obj.end_frame - obj.start_frame
                     if id in objects_res:
-                        if objects_res[id][1] <= diff:
-                            objects_res[id] = cls, diff
+                        if objects_res[id].dist <= dist:
+                            objects_res[id] = SimpleNamespace(cls=obj.cls, dist=dist, frames=frames)
                     else:
-                        objects_res[id] = cls, diff
+                        objects_res[id] = SimpleNamespace(cls=obj.cls, dist=dist, frames=frames)
 
-            car_frames = [diff for cls, diff in objects_res.values() if cls == 2]
-            car_count = len(car_frames)
+            cars = [obj for obj in objects_res.values() if obj.cls == 2]
+            car_count = len(cars)
             if car_count:
-                car_speed = sum([0.02 / (f / fps / 3600) for f in car_frames]) / car_count
+                kmpf = 0.02 * sum([car.dist for car in cars]) / sum([car.frames for car in cars])
+                car_speed = kmpf * fps * 3600
             else:
                 car_speed = float('nan')
 
-            bus_frames = [diff for cls, diff in objects_res.values() if cls == 1]
-            bus_count = len(bus_frames)
+            buses = [obj for obj in objects_res.values() if obj.cls == 1]
+            bus_count = len(buses)
             if bus_count:
-                bus_speed = sum([0.02 / (f / fps / 3600) for f in bus_frames]) / bus_count
+                kmpf = 0.02 * sum([bus.dist for bus in buses]) / sum([bus.frames for bus in buses])
+                bus_speed = kmpf * fps * 3600
             else:
                 bus_speed = float('nan')
 
-            van_frames = [diff for cls, diff in objects_res.values() if cls == 4]
-            van_count = len(van_frames)
+            vans = [obj for obj in objects_res.values() if obj.cls == 4]
+            van_count = len(vans)
             if van_count:
-                van_speed = sum([0.02 / (f / fps / 3600) for f in van_frames]) / van_count
+                kmpf = 0.02 * sum([van.dist for van in vans]) / sum([van.frames for van in vans])
+                van_speed = kmpf * fps * 3600
             else:
                 van_speed = float('nan')
 
             cv2.putText(annotated_frame, f'Cars: {car_count}',
-                        (10, 25),
-                        font,
-                        fontScale,
-                        fontColor,
-                        thickness,
-                        lineType)
-            cv2.putText(annotated_frame, f'Buses: {bus_count}',
-                        (10, 55),
-                        font,
-                        fontScale,
-                        fontColor,
-                        thickness,
-                        lineType)
-            cv2.putText(annotated_frame, f'Vans: {van_count}',
-                        (10, 85),
+                        (10, 30),
                         font,
                         fontScale,
                         fontColor,
                         thickness,
                         lineType)
             cv2.putText(annotated_frame, f'Car speed: {car_speed:.3f}',
-                        (10, 115),
+                        (10, 60),
+                        font,
+                        fontScale,
+                        fontColor,
+                        thickness,
+                        lineType)
+
+            cv2.putText(annotated_frame, f'Buses: {bus_count}',
+                        (10, 90),
                         font,
                         fontScale,
                         fontColor,
                         thickness,
                         lineType)
             cv2.putText(annotated_frame, f'Bus speed: {bus_speed:.3f}',
-                        (10, 145),
+                        (10, 120),
+                        font,
+                        fontScale,
+                        fontColor,
+                        thickness,
+                        lineType)
+            
+            cv2.putText(annotated_frame, f'Vans: {van_count}',
+                        (10, 150),
                         font,
                         fontScale,
                         fontColor,
                         thickness,
                         lineType)
             cv2.putText(annotated_frame, f'Van speed: {van_speed:.3f}',
-                        (10, 175),
+                        (10, 180),
                         font,
                         fontScale,
                         fontColor,
@@ -172,7 +212,7 @@ def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml
                         lineType)
 
             # Display the annotated frame
-            cv2.imshow("YOLOv8 Tracking", annotated_frame)
+            cv2.imshow(markup_path, annotated_frame)
 
             # Break the loop if 'q' is pressed
             if cv2.waitKey(1) & 0xFF == ord("q"):
@@ -185,9 +225,13 @@ def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml
     cap.release()
     cv2.destroyAllWindows()
 
+    print(car_count, car_speed)
+    print(van_count, van_speed)
+    print(bus_count, bus_speed)
+
 
 model = YOLO('models/yolov8s_1.pt')
 fname = 'KRA-2-7-2023-08-23-evening'
 
-# visualize(model, f'videos/raw/{fname}.mp4', f'videos/markup/{fname}.json', vid_stride=0)
-visualize(model, f'videos/raw/output.mp4', f'videos/markup/{fname}.json', vid_stride=2)
+visualize(model, f'videos/raw/{fname}.mp4', f'videos/markup/{fname}.json', vid_stride=2)
+# visualize(model, f'videos/raw/output.mp4', f'videos/markup/{fname}.json', vid_stride=2)
