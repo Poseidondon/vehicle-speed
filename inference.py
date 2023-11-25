@@ -163,7 +163,7 @@ def process_dir(model, vid_dir: str, markup_dir: str, csv_path: str):
     # create csv
     if not os.path.exists(csv_path):
         with open(csv_path, 'w') as f:
-            f.write('file_name,car,quantity_car,average_speed_car,van,quantity_van,average_speed_van,bus,quantity_bus,average_speed_bus\n')
+            f.write('file_name;quantity_car;average_speed_car;quantity_van;average_speed_van;quantity_bus;average_speed_bus\n')
 
     # read existing lines
     existing = set()
@@ -189,17 +189,17 @@ def process_dir(model, vid_dir: str, markup_dir: str, csv_path: str):
         # process
         res = process(model, str(vid_path), str(markup_path), vid_stride=2)
         f_res = [fname,
-                 'car', str(res.car_count), str(round(res.car_speed, 2)),
-                 'van', str(res.van_count), str(round(res.van_speed, 2)),
-                 'bus', str(res.bus_count), str(round(res.bus_speed, 2))]
+                 str(res.car_count), str(round(res.car_speed, 2)),
+                 str(res.van_count), str(round(res.van_speed, 2)),
+                 str(res.bus_count), str(round(res.bus_speed, 2))]
 
         # write line to csv
         with open(csv_path, 'a') as f:
-            f.write(','.join(f_res) + '\n')
+            f.write(';'.join(f_res) + '\n')
 
 
 model = YOLO('models/yolov8s_2.pt')
 # fname = 'KRA-2-7-2023-08-23-evening'
 # res = process(model, f'videos/raw/CRF18/{fname}.mp4', f'videos/markup/{fname}.json', vid_stride=2)
 
-process_dir(model, 'videos/raw', 'videos/markup', 'videos/train_res_big.csv')
+process_dir(model, f'videos/test/vids', 'videos/test/markup', 'videos/test/result.csv')

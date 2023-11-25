@@ -145,7 +145,7 @@ def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml
                         objects_res[id] = SimpleNamespace(cls=obj.cls, dist=dist, frames=frames)
 
             # 2, 1, 4 for yolov8s_1.pt
-            cars = [obj for obj in objects_res.values() if obj.cls == 1]
+            cars = [obj for obj in objects_res.values() if obj.cls == 2]
             car_count = len(cars)
             if car_count:
                 kmpf = factor * 0.02 * sum([x.dist / x.frames for x in cars]) / car_count
@@ -154,7 +154,7 @@ def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml
             else:
                 car_speed = float('nan')
 
-            buses = [obj for obj in objects_res.values() if obj.cls == 0]
+            buses = [obj for obj in objects_res.values() if obj.cls == 1]
             bus_count = len(buses)
             if bus_count:
                 kmpf = factor * 0.02 * sum([x.dist / x.frames for x in buses]) / bus_count
@@ -164,7 +164,7 @@ def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml
             else:
                 bus_speed = float('nan')
 
-            vans = [obj for obj in objects_res.values() if obj.cls == 3]
+            vans = [obj for obj in objects_res.values() if obj.cls == 4]
             van_count = len(vans)
             if van_count:
                 kmpf = factor * 0.02 * sum([x.dist / x.frames for x in vans]) / van_count
@@ -238,8 +238,8 @@ def visualize(model, video_path, markup_path, vid_stride=0, tracker="custom.yaml
     print(bus_count, bus_speed)
 
 
-model = YOLO('models/yolov8s_2.pt')
-fname = 'KRA-2-7-2023-08-23-evening'
+model = YOLO('models/yolov8s_1.pt')
+fname = 'KRA-2-10-2023-09-11-morning'
 
-res = visualize(model, f'videos/raw/CRF18/{fname}.mp4', f'videos/markup/{fname}.json', vid_stride=0)
+res = visualize(model, f'videos/test/vids/{fname}.mp4', f'videos/markup/{fname}.json', vid_stride=0)
 # visualize(model, f'videos/raw/output.mp4', f'videos/markup/{fname}.json', vid_stride=2)
