@@ -65,6 +65,13 @@ def get_oriented_annotations(annotation):
     return np.array(out_areas)
 
 
+def get_oriented_zone(zone: np.ndarray):
+    assert zone.shape == (4, 2), zone.shape
+    if np.linalg.norm(zone[1] - zone[0]) < np.linalg.norm(zone[2] - zone[1]):
+        zone = np.roll(zone, 1, axis=0)
+    return zone
+
+
 def distance_vector(p: np.array, a: np.array, b: np.array):
     ap = p - a
     ab = b - a
