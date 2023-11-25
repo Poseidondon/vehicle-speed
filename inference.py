@@ -3,6 +3,7 @@ import json
 import numpy as np
 import torch
 import os
+import glob
 
 from ultralytics import YOLO
 from types import SimpleNamespace
@@ -11,7 +12,7 @@ from tqdm import tqdm
 from pathlib import Path
 
 
-def process(model, video_path, markup_path, vid_stride=0, tracker="bytetrack.yaml"):
+def process(model, video_path, markup_path, vid_stride=0, tracker="bytetrack.yaml", factor=0.9):
     # open markup
     with open(markup_path) as f:
         markup = json.load(f)
@@ -121,7 +122,7 @@ def process(model, video_path, markup_path, vid_stride=0, tracker="bytetrack.yam
     cars = [obj for obj in objects_res.values() if obj.cls == 1]
     car_count = len(cars)
     if car_count:
-        kmpf = 0.02 * sum([x.dist / x.frames for x in cars]) / car_count
+        kmpf = factor * 0.02 * sum([x.dist / x.frames for x in cars]) / car_count
         # kmpf = 0.02 * sum([car.dist for car in cars]) / sum([car.frames for car in cars])
         car_speed = kmpf * fps * 3600
     else:
@@ -130,7 +131,7 @@ def process(model, video_path, markup_path, vid_stride=0, tracker="bytetrack.yam
     buses = [obj for obj in objects_res.values() if obj.cls == 0]
     bus_count = len(buses)
     if bus_count:
-        kmpf = 0.02 * sum([x.dist / x.frames for x in buses]) / bus_count
+        kmpf = factor * 0.02 * sum([x.dist / x.frames for x in buses]) / bus_count
 
         # kmpf = 0.02 * sum([bus.dist for bus in buses]) / sum([bus.frames for bus in buses])
         bus_speed = kmpf * fps * 3600
@@ -140,7 +141,7 @@ def process(model, video_path, markup_path, vid_stride=0, tracker="bytetrack.yam
     vans = [obj for obj in objects_res.values() if obj.cls == 3]
     van_count = len(vans)
     if van_count:
-        kmpf = 0.02 * sum([x.dist / x.frames for x in vans]) / van_count
+        kmpf = factor * 0.02 * sum([x.dist / x.frames for x in vans]) / van_count
 
         # kmpf = 0.02 * sum([van.dist for van in vans]) / sum([van.frames for van in vans])
         van_speed = kmpf * fps * 3600
@@ -172,6 +173,10 @@ def process_dir(model, vid_dir: str, markup_dir: str, csv_path: str):
             existing.add(items[0])
 
     for file in os.listdir(vid_dir):
+        # filter only mp4
+        if not file.endswith('.mp4'):
+            continue
+
         # check if already exists
         fname = file.split('.')[0]
         if fname in existing:
@@ -197,4 +202,4 @@ model = YOLO('models/yolov8s_2.pt')
 # fname = 'KRA-2-7-2023-08-23-evening'
 # res = process(model, f'videos/raw/CRF18/{fname}.mp4', f'videos/markup/{fname}.json', vid_stride=2)
 
-process_dir(model, 'videos/raw/CRF18', 'videos/markup', 'videos/train_res.csv')
+process_dir(model, 'videos/raw', 'videos/markup', 'videos/train_res_big.csv')
